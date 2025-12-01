@@ -8,11 +8,7 @@
 
 
 //VENT NEEDS TO RUN CONTINUOUSLY 
-//LCD not displaying the exact values of temp & humditiy 
-//hitting the stop button does not turn into disabled state 
-//start buttons not working & yellow LED does not light up
-//LCD really slow 
-//add a loop to make the LCD keep changing permentally (if state for all measurements)
+//start buttons not working?
 
 // ====== HARDWARE CONFIGURATION ======
 // Pin assignments should be verified with the physical wiring configuration.
@@ -202,7 +198,7 @@ void setup(){
 
   lcd.begin(16, 2);
   lcd.clear();
-  lcd.print("Swamp Cooler Init");
+  lcd.print("Swamp Cooler On");
 
   dht.begin();
   ventStepper.setSpeed(30);
@@ -253,7 +249,7 @@ void update_lcd(float tempC, float hum, uint16_t waterADC) {
   lcd.print("Water:");
   lcd.print(waterADC);
   lcd.print(" S:");
-  lcd.print(currentState==RUNNING ? "RUN" : currentState==IDLE ? "IDLE" : currentState==ERROR_STATE ? "ERR" : "OFF");
+  lcd.print(currentState==RUNNING ? "RUN" : currentState==IDLE ? "IDLE" : currentState==ERROR_STATE ? "ERROR" : currentState==DISABLED ? "DISABLED":"OFF");
 }
 
 // ====== MAIN CONTROL LOOP ======
@@ -368,6 +364,9 @@ void loop(){
   }
 
   if(currentState == DISABLED){
-  fan_set_off();
+    fan_set_off();
+    lcd.clear();
+    lcd.print("DISABLED");
+
   }
 }
