@@ -6,11 +6,6 @@
 #include <DHT.h>
 #include <RTClib.h>
 
-
-//VENT NEEDS TO RUN CONTINUOUSLY 
-
-//reset button during error 
-
 // ====== HARDWARE CONFIGURATION ======
 // Pin assignments should be verified with the physical wiring configuration.
 
@@ -30,7 +25,9 @@ const uint8_t RESET_BUTTON_PIN = 18;
 
 // Fan motor PWM control pin
 // analogWrite() is permitted for PWM fan control per project rules.
-const uint8_t FAN_PWM_PIN = 11;
+const uint8_t FAN_PWM_PIN = 11;  //L293D pin 1 
+const uint8_t FAN_IN1_PIN = 9;   // L293D pin 2
+const uint8_t FAN_IN2_PIN = 10;  // L293D pin 7
 
 // Stepper motor configuration (Stepper library usage permitted)
 const uint8_t STEPPER_PIN_1 = 4;
@@ -148,8 +145,19 @@ inline void led_set_blue(bool on){ if (on) PORTA |= (1 << PA3); else PORTA &= ~(
 // ====== FAN CONFIGURATION ======
 // Fan pin configured via DDRB; PWM control handled using analogWrite().
 void init_fan_pin(){
+  //pin 11 → PB5
   DDRB |= (1 << DDB5);
   analogWrite(FAN_PWM_PIN, 0);
+
+  // pin 9 → PH6
+  DDRH |= (1 << DDH6);
+
+  // pin 10 → PB4
+  DDRB |= (1 << DDB4);
+
+  //motor off defaultly
+  PORTH &= ~(1 << PH6);
+  PORTB &= ~(1 << PB4);
 }
 
 // ====== INTERRUPT SERVICE ROUTINES ======
@@ -250,8 +258,18 @@ void log_motor_event(const char* action){
 }
 
 // ====== FAN CONTROL ROUTINES ======
-void fan_set_on(uint8_t pwm = 200){ analogWrite(FAN_PWM_PIN, pwm); }
-void fan_set_off(){ analogWrite(FAN_PWM_PIN, 0); }
+void fan_set_on(uint8_t pwm = 200){ 
+  // Forward Direction
+  PORTH |= (1 << PH6);     // IN1 HIGH
+  PORTB &= ~(1 << PB4);    // IN2 LOW
+  analogWrite(FAN_PWM_PIN, pwm);
+}
+
+void fan_set_off(){
+  analogWrite(FAN_PWM_PIN, 0);
+  PORTH &= ~(1 << PH6);
+  PORTB &= ~(1 << PB4);
+}
 
 // ====== LCD DISPLAY ROUTINE ======
 void update_lcd(float tempC, float hum, uint16_t waterADC) {
@@ -269,7 +287,7 @@ void update_lcd(float tempC, float hum, uint16_t waterADC) {
 }
 
 // ====== MAIN CONTROL LOOP ======
-void loop(){
+void loop(){  
   // Button handling logic
 
   if(reset_pressed){
@@ -331,6 +349,10 @@ void loop(){
                tempC, hum, waterADC);
       uart_send_string(buf);
       uart_newline();
+
+      tempC = 28.5; // fake temp for testing
+      hum = 50.0;   // fake humidity
+
 
       if(waterADC < WATER_LOW_THRESHOLD_ADC) {
         fan_set_off();
