@@ -8,7 +8,8 @@
 
 
 //VENT NEEDS TO RUN CONTINUOUSLY 
-//start buttons not working?
+
+//reset button during error 
 
 // ====== HARDWARE CONFIGURATION ======
 // Pin assignments should be verified with the physical wiring configuration.
@@ -204,13 +205,21 @@ void setup(){
   ventStepper.setSpeed(30);
 
   init_led_pins();
+
   init_fan_pin();
 
+  //so that the yellow LED is lit up in the beginning 
+  update_leds_for_state(DISABLED);
+
   // Configure button inputs using direct port access and enable pull-ups.
+  // START (pin2 = PE4)
+  // STOP (pin3 = PE5)
   DDRE &= ~((1 << DDE4) | (1 << DDE5));
   PORTE |= (1 << PE4) | (1 << PE5);
-  DDRB &= ~(1 << DDB5);
-  PORTB |= (1 << PB5);
+
+  // RESET (pin 18 = PD3)
+  DDRB &= ~(1 << DDD3);
+  PORTB |= (1 << PD3);
 
   // Interrupt configuration for buttons
   attachInterrupt(digitalPinToInterrupt(START_BUTTON_PIN), start_isr, FALLING);
@@ -255,6 +264,14 @@ void update_lcd(float tempC, float hum, uint16_t waterADC) {
 // ====== MAIN CONTROL LOOP ======
 void loop(){
   // Button handling logic
+
+  if(reset_pressed){
+    uart_send_string("RESET ISR");
+    reset_pressed = false;
+    transition_to_state(IDLE);
+    log_event("User RESET pressed -> IDLE");
+  }
+
   if(start_pressed) {
     start_pressed = false;
     if(currentState == DISABLED) {
@@ -275,16 +292,6 @@ void loop(){
     log_motor_event("OFF (stop btn)");
   }
 
-  if(reset_pressed){
-    reset_pressed = false;
-    uint16_t waterADC = adc_read_channel(WATER_LEVEL_ADC_CHANNEL);
-    if(waterADC >= WATER_LOW_THRESHOLD_ADC) {
-      transition_to_state(IDLE);
-      log_event("User RESET pressed -> IDLE");
-    }else {
-      log_event("User RESET pressed -> water still low, remain ERROR");
-    }
-  }
 
   // Sensor monitoring and LCD update
   if(currentState != DISABLED){
