@@ -191,6 +191,9 @@ void transition_to_state(CoolerState newState){
 // ====== SYSTEM INITIALIZATION ======
 void setup(){
   uart_init(9600);
+  // Example: manually set local time
+  //rtc.adjust(DateTime(2025, 12, 7, 20, 3, 0));
+
 
   if (!rtc.begin()){
     uart_send_string("RTC: NOT FOUND");
@@ -219,7 +222,7 @@ void setup(){
 
   // RESET (pin 18 = PD3)
   DDRB &= ~(1 << DDD3);
-  PORTB |= (1 << PD3);
+  PORTD |= (1 << PD3);
 
   // Interrupt configuration for buttons
   attachInterrupt(digitalPinToInterrupt(START_BUTTON_PIN), start_isr, FALLING);
@@ -229,6 +232,10 @@ void setup(){
   transition_to_state(DISABLED);
   log_event("SYSTEM BOOT");
   lastLcdUpdateMillis = millis();
+
+  start_pressed = false;
+  stop_pressed = false;
+  reset_pressed = false;
 }
 
 // ====== EVENT LOGGING ROUTINES ======
@@ -266,10 +273,15 @@ void loop(){
   // Button handling logic
 
   if(reset_pressed){
-    uart_send_string("RESET ISR");
     reset_pressed = false;
-    transition_to_state(IDLE);
-    log_event("User RESET pressed -> IDLE");
+    uint16_t waterADC = adc_read_channel(WATER_LEVEL_ADC_CHANNEL);
+    if(waterADC >= WATER_LOW_THRESHOLD_ADC){
+      transition_to_state(IDLE);
+      log_event("USER RESET pressed -> IDLE");
+    }
+    else{
+      log_event("USER RESET pressed -> water still LOW");
+    }
   }
 
   if(start_pressed) {
@@ -294,7 +306,7 @@ void loop(){
 
 
   // Sensor monitoring and LCD update
-  if(currentState != DISABLED){
+  if(currentState != DISABLED && currentState != ERROR_STATE){
     unsigned long nowms = millis();
     if(nowms - lastLcdUpdateMillis >= LCD_UPDATE_INTERVAL_MS) {
       lastLcdUpdateMillis = nowms;
@@ -369,11 +381,21 @@ void loop(){
       uart_newline();
     }
   }
+  if(currentState == ERROR_STATE){
+    fan_set_off();
 
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("ERROR: LOW WATER");
+    lcd.setCursor(0,1);
+    lcd.print("Level:");
+    uint16_t waterADC = adc_read_channel(WATER_LEVEL_ADC_CHANNEL);
+    lcd.print(waterADC);
+  }
   if(currentState == DISABLED){
     fan_set_off();
     lcd.clear();
+    lcd.setCursor(0, 0);
     lcd.print("DISABLED");
-
   }
 }
