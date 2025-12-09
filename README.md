@@ -4,4 +4,4 @@ Group Name: Final Project 14
 
 Group Members: Grace Frazee and Jakob Kelley
 
-You can find the final report in this repository or you can access it through the links document. There will be the link to the demonstration video as well since it was too big of a file to add straight to github. 
+You can find the final report in this repository (with only 1 picture of the circuit) or you can access it through the link. There will be the link to the demonstration video as well since it was too big of a file to add straight to github. 
