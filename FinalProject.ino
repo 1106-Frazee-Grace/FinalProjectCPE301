@@ -18,14 +18,16 @@ const uint8_t LED_BLUE_PIN   = 25; // RUNNING state
 // Button inputs using interrupt-capable pins
 // Pin 2 -> INT4 (used for START button ISR)
 // Pin 3 -> INT5 (used for STOP button ISR)
-// Pin 21 -> INT2 (used for RESET button ISR)
+// Pin 21 -> INT2 (used for RESET button ISR) [CHANGING TO 18 because 21 is used by the Clock]
 const uint8_t START_BUTTON_PIN = 2;
 const uint8_t STOP_BUTTON_PIN  = 3;
-const uint8_t RESET_BUTTON_PIN = 21;
+const uint8_t RESET_BUTTON_PIN = 18;
 
 // Fan motor PWM control pin
 // analogWrite() is permitted for PWM fan control per project rules.
-const uint8_t FAN_PWM_PIN = 11;
+const uint8_t FAN_PWM_PIN = 11;  //L293D pin 1 
+const uint8_t FAN_IN1_PIN = 9;   // L293D pin 2
+const uint8_t FAN_IN2_PIN = 10;  // L293D pin 7
 
 // Stepper motor configuration (Stepper library usage permitted)
 const uint8_t STEPPER_PIN_1 = 4;
@@ -51,9 +53,9 @@ LiquidCrystal lcd(12, 13, A0, A1, A2, A3);
 const uint8_t WATER_LEVEL_ADC_CHANNEL = 7;
 
 // ====== CONTROL CONSTANTS ======
-const uint16_t WATER_LOW_THRESHOLD_ADC = 300; // Adjust according to calibration (0–1023)
-const float TEMP_HIGH_THRESHOLD_C = 28.0;     // Temperature to start fan
-const float TEMP_LOW_THRESHOLD_C  = 24.0;     // Temperature to stop fan
+const uint16_t WATER_LOW_THRESHOLD_ADC = 200; // Adjust according to calibration (0–1023)
+const float TEMP_HIGH_THRESHOLD_C = 20.5;     // Temperature to start fan
+const float TEMP_LOW_THRESHOLD_C  = 19.0;     // Temperature to stop fan
 const unsigned long LCD_UPDATE_INTERVAL_MS = 60000UL; // 1 minute in milliseconds
 
 // ====== SYSTEM STATES ======
@@ -143,14 +145,25 @@ inline void led_set_blue(bool on){ if (on) PORTA |= (1 << PA3); else PORTA &= ~(
 // ====== FAN CONFIGURATION ======
 // Fan pin configured via DDRB; PWM control handled using analogWrite().
 void init_fan_pin(){
+  //pin 11 → PB5
   DDRB |= (1 << DDB5);
   analogWrite(FAN_PWM_PIN, 0);
+
+  // pin 9 → PH6
+  DDRH |= (1 << DDH6);
+
+  // pin 10 → PB4
+  DDRB |= (1 << DDB4);
+
+  //motor off defaultly
+  PORTH &= ~(1 << PH6);
+  PORTB &= ~(1 << PB4);
 }
 
 // ====== INTERRUPT SERVICE ROUTINES ======
-void IRAM_ATTR start_isr(){ start_pressed = true;}
-void IRAM_ATTR stop_isr(){ stop_pressed = true;}
-void IRAM_ATTR reset_isr(){ reset_pressed = true;}
+void start_isr(){ start_pressed = true;}
+void stop_isr(){ stop_pressed = true;}
+void reset_isr(){ reset_pressed = true;}
 
 // ====== LED UPDATE ROUTINE ======
 void update_leds_for_state(CoolerState s){
@@ -194,19 +207,27 @@ void setup(){
 
   lcd.begin(16, 2);
   lcd.clear();
-  lcd.print("Swamp Cooler Init");
+  lcd.print("Swamp Cooler On");
 
   dht.begin();
   ventStepper.setSpeed(30);
 
   init_led_pins();
+
   init_fan_pin();
 
+  //so that the yellow LED is lit up in the beginning 
+  update_leds_for_state(DISABLED);
+
   // Configure button inputs using direct port access and enable pull-ups.
+  // START (pin2 = PE4)
+  // STOP (pin3 = PE5)
   DDRE &= ~((1 << DDE4) | (1 << DDE5));
   PORTE |= (1 << PE4) | (1 << PE5);
-  DDRB &= ~(1 << DDB5);
-  PORTB |= (1 << PB5);
+
+  // RESET (pin 18 = PD3)
+  DDRB &= ~(1 << DDD3);
+  PORTD |= (1 << PD3);
 
   // Interrupt configuration for buttons
   attachInterrupt(digitalPinToInterrupt(START_BUTTON_PIN), start_isr, FALLING);
@@ -216,6 +237,10 @@ void setup(){
   transition_to_state(DISABLED);
   log_event("SYSTEM BOOT");
   lastLcdUpdateMillis = millis();
+
+  start_pressed = false;
+  stop_pressed = false;
+  reset_pressed = false;
 }
 
 // ====== EVENT LOGGING ROUTINES ======
@@ -230,8 +255,18 @@ void log_motor_event(const char* action){
 }
 
 // ====== FAN CONTROL ROUTINES ======
-void fan_set_on(uint8_t pwm = 200){ analogWrite(FAN_PWM_PIN, pwm); }
-void fan_set_off(){ analogWrite(FAN_PWM_PIN, 0); }
+void fan_set_on(uint8_t pwm = 200){ 
+  // Forward Direction
+  PORTH |= (1 << PH6);     // IN1 HIGH
+  PORTB &= ~(1 << PB4);    // IN2 LOW
+  analogWrite(FAN_PWM_PIN, pwm);
+}
+
+void fan_set_off(){
+  analogWrite(FAN_PWM_PIN, 0);
+  PORTH &= ~(1 << PH6);
+  PORTB &= ~(1 << PB4);
+}
 
 // ====== LCD DISPLAY ROUTINE ======
 void update_lcd(float tempC, float hum, uint16_t waterADC) {
@@ -245,12 +280,25 @@ void update_lcd(float tempC, float hum, uint16_t waterADC) {
   lcd.print("Water:");
   lcd.print(waterADC);
   lcd.print(" S:");
-  lcd.print(currentState==RUNNING ? "RUN" : currentState==IDLE ? "IDLE" : currentState==ERROR_STATE ? "ERR" : "OFF");
+  lcd.print(currentState==RUNNING ? "RUN" : currentState==IDLE ? "IDLE" : currentState==ERROR_STATE ? "ERROR" : currentState==DISABLED ? "DISABLED":"OFF");
 }
 
 // ====== MAIN CONTROL LOOP ======
-void loop(){
+void loop(){  
   // Button handling logic
+
+  if(reset_pressed){
+    reset_pressed = false;
+    uint16_t waterADC = adc_read_channel(WATER_LEVEL_ADC_CHANNEL);
+    if(waterADC >= WATER_LOW_THRESHOLD_ADC){
+      transition_to_state(IDLE);
+      log_event("USER RESET pressed -> IDLE");
+    }
+    else{
+      log_event("USER RESET pressed -> water still LOW");
+    }
+  }
+
   if(start_pressed) {
     start_pressed = false;
     if(currentState == DISABLED) {
@@ -271,60 +319,60 @@ void loop(){
     log_motor_event("OFF (stop btn)");
   }
 
-  if(reset_pressed){
-    reset_pressed = false;
-    uint16_t waterADC = adc_read_channel(WATER_LEVEL_ADC_CHANNEL);
-    if(waterADC >= WATER_LOW_THRESHOLD_ADC) {
-      transition_to_state(IDLE);
-      log_event("User RESET pressed -> IDLE");
-    }else {
-      log_event("User RESET pressed -> water still low, remain ERROR");
-    }
-  }
 
   // Sensor monitoring and LCD update
-  if(currentState != DISABLED){
-    unsigned long nowms = millis();
-    if(nowms - lastLcdUpdateMillis >= LCD_UPDATE_INTERVAL_MS) {
-      lastLcdUpdateMillis = nowms;
+  if(currentState != DISABLED && currentState != ERROR_STATE){
+    float hum = dht.readHumidity();
+    float tempC = dht.readTemperature();
+    uint16_t waterADC = adc_read_channel(WATER_LEVEL_ADC_CHANNEL);
 
-      float hum = dht.readHumidity();
-      float tempC = dht.readTemperature();
-      if(isnan(hum) || isnan(tempC)){
-        uart_send_string("DHT read failed");
-        uart_newline();
-        hum = 0;
-        tempC = 0;
-      }
-
-      uint16_t waterADC = adc_read_channel(WATER_LEVEL_ADC_CHANNEL);
-      update_lcd(tempC, hum, waterADC);
-
-      char buf[128];
-      DateTime dt = rtc.now();
-      snprintf(buf, sizeof(buf),
-               "%04u-%02u-%02u %02u:%02u:%02u SENSORS T=%.1fC H=%.1f%% WaterADC=%u",
-               dt.year(), dt.month(), dt.day(), dt.hour(), dt.minute(), dt.second(),
-               tempC, hum, waterADC);
-      uart_send_string(buf);
+    
+    if(isnan(hum) || isnan(tempC)){
+      uart_send_string("DHT read failed");
       uart_newline();
+      hum = 0;
+      tempC = 0;
+    }
 
-      if(waterADC < WATER_LOW_THRESHOLD_ADC) {
+    if(waterADC < WATER_LOW_THRESHOLD_ADC) {
         fan_set_off();
         transition_to_state(ERROR_STATE);
         log_event("Transition -> ERROR due to low water");
         log_motor_event("OFF (low water)");
-      }else{
+    }else{
         if(currentState == IDLE && tempC >= TEMP_HIGH_THRESHOLD_C) {
           transition_to_state(RUNNING);
           fan_set_on(200);
           log_motor_event("ON (temp high)");
         }else if(currentState == RUNNING && tempC <= TEMP_LOW_THRESHOLD_C) {
-          fan_set_off();
-          transition_to_state(IDLE);
-          log_motor_event("OFF (temp low)");
+            fan_set_off();
+            transition_to_state(IDLE);
+            log_motor_event("OFF (temp low)");
         }
-      }
+    }
+
+    unsigned long nowms = millis();
+    if(nowms - lastLcdUpdateMillis >= LCD_UPDATE_INTERVAL_MS) {
+      lastLcdUpdateMillis = nowms;
+
+      update_lcd(tempC, hum, waterADC);
+
+      int temp10 = (int)(tempC * 10);
+      int hum10  = (int)(hum * 10);
+
+      char buf[128];
+      DateTime dt = rtc.now();
+      snprintf(buf, sizeof(buf),
+        "%04u-%02u-%02u %02u:%02u:%02u T=%d.%dC H=%d.%d%% WaterADC=%u",
+        dt.year(), dt.month(), dt.day(),
+        dt.hour(), dt.minute(), dt.second(),
+        temp10 / 10, abs(temp10 % 10),
+        hum10 / 10, abs(hum10 % 10),
+        waterADC
+      );
+
+      uart_send_string(buf);
+      uart_newline();
     }
 
     // Vent control via potentiometer input on ADC6
@@ -358,8 +406,21 @@ void loop(){
       uart_newline();
     }
   }
+  if(currentState == ERROR_STATE){
+    fan_set_off();
 
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("ERROR: LOW WATER");
+    lcd.setCursor(0,1);
+    lcd.print("Level:");
+    uint16_t waterADC = adc_read_channel(WATER_LEVEL_ADC_CHANNEL);
+    lcd.print(waterADC);
+  }
   if(currentState == DISABLED){
-  fan_set_off();
+    fan_set_off();
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("DISABLED");
   }
 }
